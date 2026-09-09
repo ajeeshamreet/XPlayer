@@ -1,0 +1,24 @@
+{
+  "name": "cli_music_player",
+  "version": "1.0.0",
+  "description": "",
+  "main": "cli_player.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ajeeshamreet/XPlayer.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ajeeshamreet/XPlayer/issues"
+  },
+  "homepage": "https://github.com/ajeeshamreet/XPlayer#readme",
+  "dependencies": {
+    "commander": "^15.0.0"
+  }
+}
