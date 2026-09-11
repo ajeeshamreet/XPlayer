@@ -341,19 +341,19 @@ function startPlayer(options) {
             listSongs();
         }
 
-        // > = Seek Forward 5s
-        if (data[0] === 0x3e) {
+        // > or . = Seek Forward 5s
+        if (data[0] === 0x3e || data[0] === 0x2e) {
             if (vlcPlayProcess) {
-                vlcPlayProcess.stdin.write(`seek +5s\n`);
+                vlcPlayProcess.stdin.write(`seek +5\n`);
                 timeElapsed = Math.min(totalDuration, timeElapsed + 5);
                 listSongs();
             }
         }
 
-        // < = Seek Backward 5s
-        if (data[0] === 0x3c) {
+        // < or , = Seek Backward 5s
+        if (data[0] === 0x3c || data[0] === 0x2c) {
             if (vlcPlayProcess) {
-                vlcPlayProcess.stdin.write(`seek -5s\n`);
+                vlcPlayProcess.stdin.write(`seek -5\n`);
                 timeElapsed = Math.max(0, timeElapsed - 5);
                 listSongs();
             }
