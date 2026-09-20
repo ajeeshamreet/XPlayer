@@ -4,6 +4,7 @@
   "description": "",
   "main": "cli_player.js",
   "scripts": {
+    "start": "node player.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -19,6 +20,8 @@
   },
   "homepage": "https://github.com/ajeeshamreet/XPlayer#readme",
   "dependencies": {
+    "blessed": "^0.1.81",
+    "blessed-contrib": "^4.11.0",
     "commander": "^15.0.0"
   }
 }
