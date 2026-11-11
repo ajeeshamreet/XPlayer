@@ -45,6 +45,7 @@ const THEMES = {
     barBg: '#181818',
     selectedBg: '#282828',
     barEmpty: '#333333',
+    borderFg: '#174D2E',
     dividerFg: '#282828',
     dimFg: '#888888',
     mutedFg: '#B3B3B3',
@@ -60,6 +61,7 @@ const THEMES = {
     barBg: '#141414',
     selectedBg: '#282828',
     barEmpty: '#333333',
+    borderFg: '#174D2E',
     dividerFg: '#282828',
     dimFg: '#888888',
     mutedFg: '#B3B3B3',
@@ -179,9 +181,10 @@ function computeLayout(screenWidth, screenHeight) {
   const w = Math.max(24, screenWidth || 80);
   const h = Math.max(10, screenHeight || 24);
 
+  const topMargin = h >= 18 ? 1 : 0;
   const bottomHeight = 1;
   const bottomGap = h >= 14 ? 1 : 0;
-  const mainHeight = Math.max(6, h - bottomHeight - bottomGap);
+  const mainHeight = Math.max(5, h - topMargin - bottomHeight - bottomGap);
   const isStacked = w < 68;
 
   if (!isStacked) {
@@ -194,23 +197,23 @@ function computeLayout(screenWidth, screenHeight) {
       isStacked: false,
       width: w,
       height: h,
-      playlist: { top: 0, left: 0, width: leftWidth, height: mainHeight },
-      nowPlaying: { top: 0, left: rightLeft, width: rightWidth, height: mainHeight },
+      playlist: { top: topMargin, left: 0, width: leftWidth, height: mainHeight },
+      nowPlaying: { top: topMargin, left: rightLeft, width: rightWidth, height: mainHeight },
       bottom: { top: h - 1, left: 0, width: w, height: bottomHeight }
     };
   }
 
-  const npHeight = h >= 20 ? 8 : (h >= 14 ? 6 : 4);
-  const gapY = h >= 14 ? 1 : 0;
-  const playlistHeight = Math.max(3, mainHeight - npHeight - gapY);
-  const npTop = playlistHeight + gapY;
+  const npHeight = h >= 22 ? 8 : (h >= 16 ? 7 : (h >= 12 ? 6 : 5));
+  const gapY = h >= 15 ? 1 : 0;
+  const playlistHeight = Math.max(4, mainHeight - npHeight - gapY);
+  const npTop = topMargin + playlistHeight + gapY;
 
   return {
     isStacked: true,
     width: w,
     height: h,
-    playlist: { top: 0, left: 0, width: w, height: playlistHeight },
-    nowPlaying: { top: npTop, left: 0, width: w, height: Math.max(3, mainHeight - npTop) },
+    playlist: { top: topMargin, left: 0, width: w, height: playlistHeight },
+    nowPlaying: { top: npTop, left: 0, width: w, height: Math.max(4, topMargin + mainHeight - npTop) },
     bottom: { top: h - 1, left: 0, width: w, height: bottomHeight }
   };
 }
@@ -238,21 +241,20 @@ function buildBottomHintsLine(maxWidth, theme, hasSearchFilter) {
   const displayOrder = [
     ['Space', 'Play/Pause'],
     ['←/→', 'Seek'],
-    ['↑/↓', 'Navigate'],
     ['/', 'Search'],
     ...(hasSearchFilter ? [['Esc', 'Clear']] : []),
     ['?', 'Shortcuts'],
     ['q', 'Quit']
   ];
-  const dropPriority = ['↑/↓', '←/→', '/', 'Esc', '?', 'Space', 'q'];
+  const dropPriority = ['←/→', '/', 'Esc', '?', 'Space', 'q'];
 
   let active = displayOrder.slice();
-  const sep = maxWidth >= 64 ? '   ' : '  ';
+  const sep = maxWidth >= 60 ? '   ' : '  ';
   const plainLen = (list) =>
     list.map(([k, l]) => `${k} ${l}`).join(sep).length;
 
   for (const dropKey of dropPriority) {
-    if (plainLen(active) <= maxWidth) break;
+    if (plainLen(active) + 1 <= maxWidth) break;
     if (active.length <= 2) break;
     active = active.filter(([k]) => k !== dropKey);
   }
@@ -398,9 +400,11 @@ function startElapsedTracking() {
         handleTrackEnd();
         return;
       }
+      if (!searchMode && !helpModalOpen) {
+        renderNowPlaying();
+        screen.render();
+      }
     }
-    renderNowPlaying();
-    screen.render();
   }, 250);
 }
 
@@ -585,34 +589,33 @@ function clearSearchFilter() {
 function renderPlaylistHeader() {
   if (!playlistHeader || !playlistPanel) return;
   const t = getTheme();
-  const panelW = playlistPanel.width || 40;
-  const padX = panelW >= 30 ? 2 : 1;
-  const innerW = Math.max(10, panelW - padX * 2);
+  const innerW = Math.max(10, playlistHeader.width || 30);
+  const contentW = Math.max(8, innerW - 2);
+  const innerH = Math.max(2, (playlistPanel.height || 10) - 2);
 
   let leftText = `{bold}{${t.textFg}-fg}Playlist{/}`;
   let leftLen = 'Playlist'.length;
 
   let rightPlain = `${allSongs.length} ${allSongs.length === 1 ? 'track' : 'tracks'}`;
   if (searchQuery) {
-    const maxQ = Math.max(5, Math.floor(innerW * 0.35));
+    const maxQ = Math.max(5, Math.floor(contentW * 0.35));
     const qDisplay = truncateText(searchQuery, maxQ);
     leftText += `  {${t.green}-fg}"${blessed.escape(qDisplay)}"{/}`;
     leftLen += 2 + qDisplay.length + 2;
-    rightPlain =
-      innerW >= 32
-        ? `${filteredSongs.length}/${allSongs.length}  Esc clear`
-        : `${filteredSongs.length}/${allSongs.length}`;
+    const fullRight = `${filteredSongs.length}/${allSongs.length}  Esc clear`;
+    const shortRight = `${filteredSongs.length}/${allSongs.length}`;
+    rightPlain = leftLen + 1 + fullRight.length <= contentW ? fullRight : shortRight;
   }
 
-  const gap = Math.max(1, innerW - leftLen - rightPlain.length);
-  const showRight = leftLen + 1 + rightPlain.length <= innerW;
+  const gap = Math.max(1, contentW - leftLen - rightPlain.length);
+  const showRight = leftLen + 1 + rightPlain.length <= contentW;
   const headerLine = showRight
     ? `${leftText}${' '.repeat(gap)}{${t.dimFg}-fg}${rightPlain}{/}`
     : leftText;
 
   const lines = [headerLine];
-  if (playlistPanel.height >= 8) {
-    lines.push(`{${t.dividerFg}-fg}${'─'.repeat(innerW)}{/}`);
+  if (innerH >= 6) {
+    lines.push(`{${t.dividerFg}-fg}${'─'.repeat(Math.max(4, innerW - 1))}{/}`);
   }
   playlistHeader.setContent(lines.join('\n'));
 }
@@ -689,11 +692,10 @@ function updatePlaylistItems() {
 function renderNowPlaying() {
   if (!nowPlayingPanel || !nowPlayingContent) return;
   const t = getTheme();
-  const panelW = nowPlayingPanel.width || 40;
-  const panelH = nowPlayingPanel.height || 20;
-  const padX = panelW >= 30 ? 2 : 1;
-  const innerW = Math.max(16, panelW - padX * 2);
-  const compact = panelH < 11;
+  const innerW = Math.max(12, nowPlayingContent.width || 34);
+  const innerH = Math.max(3, nowPlayingContent.height || 16);
+  const contentW = Math.max(10, innerW - 1);
+  const compact = innerH < 9;
 
   const hasTrack = playingIndex !== -1 && Boolean(allSongs[playingIndex]);
   const rawTitle = hasTrack ? stripExtension(allSongs[playingIndex]) : 'No track playing';
@@ -701,8 +703,8 @@ function renderNowPlaying() {
   // Progress line
   const elapsedStr = formatTime(timeElapsed);
   const totalStr = formatTime(totalDuration);
-  const timeGap = innerW >= 28 ? '  ' : ' ';
-  const barW = Math.max(4, innerW - elapsedStr.length - totalStr.length - timeGap.length * 2);
+  const timeGap = contentW >= 28 ? '  ' : ' ';
+  const barW = Math.max(4, contentW - elapsedStr.length - totalStr.length - timeGap.length * 2);
   const progressBar = buildProgressBarString(
     timeElapsed,
     totalDuration,
@@ -741,9 +743,9 @@ function renderNowPlaying() {
   const nextGlyph = `{${t.mutedFg}-fg}▸▸{/}`;
 
   let controlsLine;
-  if (innerW >= 36) {
+  if (contentW >= 36) {
     controlsLine = `${shuffleStr}   ${prevGlyph}  ${playLabel}  ${nextGlyph}   ${repeatStr}`;
-  } else if (innerW >= 26) {
+  } else if (contentW >= 26) {
     controlsLine = `${shuffleStr}  ${prevGlyph} ${playGlyph} ${nextGlyph}  ${repeatStr}`;
   } else {
     const sShort = shuffleOn ? `{${t.greenBright}-fg}⇄{/}` : `{${t.dimFg}-fg}⇄{/}`;
@@ -757,7 +759,7 @@ function renderNowPlaying() {
   const volRight = isMuted
     ? `{${t.dangerFg}-fg}Muted{/}`
     : `{${t.mutedFg}-fg}${volValueText}{/}`;
-  const volBarW = Math.max(4, Math.min(20, innerW - 3 - 5 - 4));
+  const volBarW = Math.max(4, Math.min(20, contentW - 3 - 5 - 4));
   let volBar;
   if (isMuted) {
     volBar = `{${t.barEmpty}-fg}${'─'.repeat(volBarW)}{/}`;
@@ -769,21 +771,21 @@ function renderNowPlaying() {
   const volumeLine = `${volLabel}  ${volBar}  ${volRight}`;
 
   if (compact) {
-    const titleLines = wrapTextLines(rawTitle, innerW, 1).map((line) =>
+    const titleLines = wrapTextLines(rawTitle, contentW, 1).map((line) =>
       hasTrack
         ? `{bold}{${t.textFg}-fg}${blessed.escape(line)}{/}`
         : `{${t.dimFg}-fg}${blessed.escape(line)}{/}`
     );
     const rows = [titleLines[0], progressLine, controlsLine];
-    if (panelH >= 5) rows.push(volumeLine);
-    const compactTopPad = panelH > rows.length ? Math.floor((panelH - rows.length) / 2) : 0;
+    if (innerH >= 4) rows.push(volumeLine);
+    const compactTopPad = innerH > rows.length ? Math.floor((innerH - rows.length) / 2) : 0;
     nowPlayingContent.top = 0;
     nowPlayingContent.setContent([...Array(compactTopPad).fill(''), ...rows].join('\n'));
     return;
   }
 
   // Standard layout with header matching Playlist panel
-  const titleLines = wrapTextLines(rawTitle, innerW, 2).map((line) =>
+  const titleLines = wrapTextLines(rawTitle, contentW, 2).map((line) =>
     hasTrack
       ? `{bold}{${t.textFg}-fg}${blessed.escape(line)}{/}`
       : `{${t.dimFg}-fg}${blessed.escape(line)}{/}`
@@ -799,14 +801,14 @@ function renderNowPlaying() {
     volumeLine
   ];
 
-  const availableBodyH = Math.max(1, panelH - 2);
+  const availableBodyH = Math.max(1, innerH - 2);
   const topPad = availableBodyH > bodyLines.length
     ? Math.floor((availableBodyH - bodyLines.length) / 2)
     : 0;
 
   const headerLines = [
     `{${t.dimFg}-fg}Now Playing{/}`,
-    `{${t.dividerFg}-fg}${'─'.repeat(innerW)}{/}`
+    `{${t.dividerFg}-fg}${'─'.repeat(contentW)}{/}`
   ];
 
   const paddedBody = [
@@ -833,25 +835,25 @@ function renderHelpModal() {
   const sh = screen.height || 24;
 
   const shortcuts = [
-    ['Space / p', 'Play / Pause'],
+    ['Space', 'Play / Pause'],
     ['Enter', 'Play selected'],
-    ['n / ]', 'Next track'],
-    ['b / [', 'Previous track'],
-    ['← / →  (, / .)', 'Seek -5s / +5s'],
-    ['↑ / ↓  (k / j)', 'Navigate list'],
+    ['n', 'Next track'],
+    ['b', 'Previous track'],
+    ['← / →', 'Seek -5s / +5s'],
+    ['↑ / ↓', 'Navigate list'],
     ['+ / -', 'Volume +/- 5%'],
     ['m', 'Mute / Unmute'],
     ['s', 'Toggle shuffle'],
     ['r', 'Cycle repeat'],
     ['/', 'Search tracks'],
-    ['Esc', 'Clear search'],
+    ['Esc', 'Clear / Close'],
     ['t', 'Dark contrast'],
-    ['?', 'Toggle help'],
-    ['q / Ctrl+C', 'Quit player']
+    ['?', 'Shortcuts'],
+    ['q', 'Quit']
   ];
 
-  const useTwoCols = sw >= 72 && sh >= 16;
-  const modalW = useTwoCols ? Math.min(72, sw - 4) : Math.min(44, sw - 2);
+  const useTwoCols = sw >= 60 && sh >= 16;
+  const modalW = useTwoCols ? Math.min(58, sw - 4) : Math.min(36, sw - 2);
   const desiredH = useTwoCols ? 13 : Math.min(shortcuts.length + 5, sh - 2);
   const modalH = Math.max(8, Math.min(desiredH, sh - 2));
 
@@ -861,6 +863,7 @@ function renderHelpModal() {
   helpModal.left = Math.max(0, Math.floor((sw - modalW) / 2));
 
   const lines = [];
+  const keyW = 9;
   if (useTwoCols) {
     const half = Math.ceil(shortcuts.length / 2);
     const innerModalW = modalW - 4; // 2 border + 2 horizontal padding
@@ -869,7 +872,6 @@ function renderHelpModal() {
       const leftItem = shortcuts[i];
       const rightItem = shortcuts[i + half];
       const fmtEntry = ([k, desc]) => {
-        const keyW = 15;
         const descW = Math.max(4, colW - keyW);
         const keyCol = k.padEnd(keyW, ' ');
         const descCol = truncateText(desc, descW).padEnd(descW, ' ');
@@ -882,8 +884,8 @@ function renderHelpModal() {
   } else {
     const innerW = Math.max(16, modalW - 4);
     for (const [k, desc] of shortcuts) {
-      const keyCol = k.padEnd(15, ' ');
-      const descCol = truncateText(desc, Math.max(4, innerW - 16));
+      const keyCol = k.padEnd(keyW, ' ');
+      const descCol = truncateText(desc, Math.max(4, innerW - keyW - 1));
       lines.push(` {bold}{${t.greenBright}-fg}${keyCol}{/}{${t.mutedFg}-fg}${descCol}{/}`);
     }
   }
@@ -912,34 +914,38 @@ function applyResponsiveLayout() {
   playlistPanel.width = layout.playlist.width;
   playlistPanel.height = layout.playlist.height;
 
-  const pPadX = layout.playlist.width >= 30 ? 2 : 1;
-  const pHeaderH = layout.playlist.height >= 8 ? 2 : 1;
+  const pInnerW = Math.max(10, layout.playlist.width - 2);
+  const pInnerH = Math.max(2, layout.playlist.height - 2);
+  const pPadX = pInnerW >= 26 ? 1 : 0;
+  const pHeaderH = pInnerH >= 6 ? 2 : 1;
 
   playlistHeader.top = 0;
   playlistHeader.left = pPadX;
-  playlistHeader.width = Math.max(8, layout.playlist.width - pPadX * 2);
+  playlistHeader.width = Math.max(8, pInnerW - pPadX * 2);
   playlistHeader.height = pHeaderH;
 
   playlistWidget.top = pHeaderH;
   playlistWidget.left = pPadX;
-  playlistWidget.width = Math.max(8, layout.playlist.width - pPadX * 2);
-  playlistWidget.height = Math.max(1, layout.playlist.height - pHeaderH);
+  playlistWidget.width = Math.max(8, pInnerW - pPadX * 2);
+  playlistWidget.height = Math.max(1, pInnerH - pHeaderH);
 
-  emptyPlaylistBox.top = pHeaderH + 1;
+  emptyPlaylistBox.top = pHeaderH;
   emptyPlaylistBox.left = pPadX;
-  emptyPlaylistBox.width = Math.max(8, layout.playlist.width - pPadX * 2);
-  emptyPlaylistBox.height = Math.max(3, layout.playlist.height - pHeaderH - 1);
+  emptyPlaylistBox.width = Math.max(8, pInnerW - pPadX * 2);
+  emptyPlaylistBox.height = Math.max(2, pInnerH - pHeaderH);
 
   nowPlayingPanel.top = layout.nowPlaying.top;
   nowPlayingPanel.left = layout.nowPlaying.left;
   nowPlayingPanel.width = layout.nowPlaying.width;
   nowPlayingPanel.height = layout.nowPlaying.height;
 
-  const nPadX = layout.nowPlaying.width >= 30 ? 2 : 1;
+  const nInnerW = Math.max(10, layout.nowPlaying.width - 2);
+  const nInnerH = Math.max(2, layout.nowPlaying.height - 2);
+  const nPadX = nInnerW >= 26 ? 1 : 0;
   nowPlayingContent.top = 0;
   nowPlayingContent.left = nPadX;
-  nowPlayingContent.width = Math.max(8, layout.nowPlaying.width - nPadX * 2);
-  nowPlayingContent.height = Math.max(3, layout.nowPlaying.height);
+  nowPlayingContent.width = Math.max(8, nInnerW - nPadX * 2);
+  nowPlayingContent.height = nInnerH;
 
   bottomBar.top = layout.bottom.top;
   bottomBar.left = layout.bottom.left;
@@ -957,6 +963,8 @@ function applyTheme() {
 
   playlistPanel.style.bg = t.panelBg;
   playlistPanel.style.fg = t.textFg;
+  playlistPanel.style.border.fg = t.borderFg;
+  playlistPanel.style.border.bg = t.panelBg;
 
   playlistHeader.style.bg = t.panelBg;
   playlistHeader.style.fg = t.textFg;
@@ -976,6 +984,8 @@ function applyTheme() {
 
   nowPlayingPanel.style.bg = t.panelBg;
   nowPlayingPanel.style.fg = t.textFg;
+  nowPlayingPanel.style.border.fg = t.borderFg;
+  nowPlayingPanel.style.border.bg = t.panelBg;
   nowPlayingContent.style.bg = t.panelBg;
   nowPlayingContent.style.fg = t.textFg;
 
@@ -1047,7 +1057,12 @@ function startPlayer(options) {
   playlistPanel = blessed.box({
     parent: rootBox,
     tags: true,
-    style: { bg: t.panelBg, fg: t.textFg }
+    border: { type: 'line' },
+    style: {
+      bg: t.panelBg,
+      fg: t.textFg,
+      border: { fg: t.borderFg, bg: t.panelBg }
+    }
   });
 
   playlistHeader = blessed.box({
@@ -1088,7 +1103,12 @@ function startPlayer(options) {
   nowPlayingPanel = blessed.box({
     parent: rootBox,
     tags: true,
-    style: { bg: t.panelBg, fg: t.textFg }
+    border: { type: 'line' },
+    style: {
+      bg: t.panelBg,
+      fg: t.textFg,
+      border: { fg: t.borderFg, bg: t.panelBg }
+    }
   });
 
   nowPlayingContent = blessed.box({
@@ -1151,6 +1171,7 @@ function startPlayer(options) {
   });
 
   playlistWidget.on('select', (_, index) => {
+    if (helpModalOpen || searchMode) return;
     playTrack(index);
   });
 
@@ -1162,6 +1183,7 @@ function startPlayer(options) {
       helpModal.setFront();
     } else {
       helpModal.hide();
+      renderNowPlaying();
     }
     screen.render();
   }
@@ -1214,6 +1236,7 @@ function startPlayer(options) {
     searchMode = false;
     searchInputBox.hide();
     playlistWidget.focus();
+    renderNowPlaying();
     screen.render();
   }
 
@@ -1242,8 +1265,14 @@ function startPlayer(options) {
     }
 
     if (helpModalOpen) {
-      if (ch === '?' || (key && (key.name === 'escape' || key.name === 'return' || key.name === 'enter'))) {
+      if (ch === '?' || (key && key.name === 'escape')) {
         toggleHelpModal(false);
+      } else if (key && key.name === 'up') {
+        helpModal.scroll(-1);
+        screen.render();
+      } else if (key && key.name === 'down') {
+        helpModal.scroll(1);
+        screen.render();
       }
       return;
     }
@@ -1260,7 +1289,7 @@ function startPlayer(options) {
       return;
     }
 
-    if (key && (key.name === 'up' || key.name === 'k')) {
+    if (key && key.name === 'up') {
       if (filteredSongs.length > 0) {
         cursor = (cursor - 1 + filteredSongs.length) % filteredSongs.length;
         playlistWidget.select(cursor);
@@ -1269,7 +1298,7 @@ function startPlayer(options) {
       return;
     }
 
-    if (key && (key.name === 'down' || key.name === 'j')) {
+    if (key && key.name === 'down') {
       if (filteredSongs.length > 0) {
         cursor = (cursor + 1) % filteredSongs.length;
         playlistWidget.select(cursor);
@@ -1283,27 +1312,27 @@ function startPlayer(options) {
       return;
     }
 
-    if (key && (key.name === 'space' || key.name === 'p')) {
+    if (key && key.name === 'space') {
       togglePlayPause();
       return;
     }
 
-    if ((key && key.name === 'right') || ch === '>' || ch === '.') {
+    if (key && key.name === 'right') {
       seekPlayback(5);
       return;
     }
 
-    if ((key && key.name === 'left') || ch === '<' || ch === ',') {
+    if (key && key.name === 'left') {
       seekPlayback(-5);
       return;
     }
 
-    if (ch === 'n' || ch === ']') {
+    if (ch === 'n') {
       nextTrack();
       return;
     }
 
-    if (ch === 'b' || ch === '[') {
+    if (ch === 'b') {
       previousTrack();
       return;
     }
@@ -1313,7 +1342,7 @@ function startPlayer(options) {
       return;
     }
 
-    if (ch === '-' || ch === '_') {
+    if (ch === '-') {
       changeVolume(-5);
       return;
     }

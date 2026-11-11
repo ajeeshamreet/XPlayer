@@ -200,6 +200,78 @@ This document.
 
 ---
 
+## Task 10 — Minimal Spotify-Inspired UI Redesign
+
+**Status:** Completed
+
+### User Request
+Redesign the cluttered orange/yellow multi-window interface into a modern, minimal, Spotify-inspired CLI layout with dark charcoal and black backgrounds, green accents, a playlist on the left showing track names and durations, a compact Now Playing section on the right, minimal bottom hints, a `?` shortcuts popup, responsive terminal sizing, and no duplicated status/volume/mode information while preserving existing playback logic.
+
+### Work Completed
+Redesigned the TUI layer in `player.js` (committed in `5f6494a`) while preserving the `vlc` `rc` audio engine and `afinfo` duration detection:
+
+- **Spotify Charcoal/Black + Green Themes (`THEMES`)**:
+  - Replaced all orange/yellow themes with `charcoal` (default `#000000` canvas, `#141414` charcoal panels, `#181818` bottom bar/overlays, `#282828` row selection) and `midnight` (`#000000` pure black panels), paired with Spotify green (`#1DB954` / `#1ED760`) accents.
+  - Verified palette hexes against `blessed.colors.match()` to prevent unintended ANSI color collisions.
+- **Borderless, De-Duplicated Two-Pane Layout**:
+  - Removed the redundant top status bar, large permanent shortcuts panel, box borders/bracketed labels, decorative emojis, and duplicate volume/mode/playback badges.
+  - **Left Playlist Panel**: Displays track numbers (replaced by green `▸` / `‖` for the active track), truncated clean track titles, and right-aligned `mm:ss` durations preloaded asynchronously via `afinfo` (`preloadAllDurations` / `getCachedDuration`) without blocking startup.
+  - **Right Compact Now Playing Panel**: Displays the current track title, sleek `━●─` progress bar (`elapsed` / `total`), playback controls and state (`▶ Playing` / `‖ Paused` / `■ Stopped`), shuffle (`⇄`) and repeat (`↻`) indicators, and volume bar (`Vol`) in one place.
+- **Bottom Hints Bar & `?` Shortcuts Modal**:
+  - Replaced the always-visible keys window with a single-line bottom hints bar (`buildBottomHintsLine`) and an on-demand centered shortcuts overlay (`renderHelpModal`) toggled via `?` (`Esc` or `?` to close).
+  - Added `Esc` handling in normal mode to clear an active search filter (`clearSearchFilter`).
+- **Responsive Layout & Blessed Fixes**:
+  - Added `computeLayout` and `applyResponsiveLayout` to switch dynamically between side-by-side (`>= 68` cols) and stacked (`< 68` cols) layouts on terminal resize.
+  - Set `wrap: false` on single-line/pre-wrapped elements to avoid Blessed ANSI-tag line wrapping, and added an `isUpdatingList` guard so `blessed.list.setItems()` does not clobber `cursor`.
+  - Version bumped to `2.2.0` and exported pure UI/layout helpers for testing.
+
+### Result
+Delivered a clean, responsive Spotify-inspired TUI with track durations in the playlist, no duplicated controls/status indicators, and verified rendering/input behavior across standard and narrow PTY terminal sizes.
+
+---
+
+## Task 11 — Simplify Keyboard Shortcuts and Update History
+
+**Status:** Completed
+
+### User Request
+Simplify keyboard shortcuts by removing unnecessary alternative keys (`[`, `]`, `,`, `.`, `k`, `j`, etc.) so each action uses a single intuitive shortcut, update the `?` shortcuts popup and bottom hints bar for a cleaner look, and update `TermPlayer_Conversation_History.md`.
+
+### Work Completed
+- **Streamlined Keybindings in `player.js`**:
+  - Removed redundant alternative keys (`k`/`j`, `p`, `<`/`>`/`,`/`.`, `[`/`]`, `_`) so each action maps to one intuitive shortcut (`↑`/`↓` navigate, `Enter` play, `Space` play/pause, `←`/`→` seek ±5s, `n`/`b` next/previous track, `+`/`-` volume, `m` mute, `s` shuffle, `r` repeat, `/` search, `Esc` clear/close, `t` dark contrast, `?` shortcuts, `q` quit, with `Ctrl+C` interrupt).
+  - Updated `startElapsedTracking()` to skip redundant `screen.render()` ticks while paused, searching, or viewing the help modal, and guarded playlist mouse selection while overlays are open.
+- **Updated Shortcuts Popup & Bottom Hints**:
+  - Updated `renderHelpModal()` to display the simplified 1-shortcut-per-action table in a more compact overlay (`keyW = 9`).
+  - Trimmed `buildBottomHintsLine()` to show only essential hints (`Space Play/Pause`, `←/→ Seek`, `/ Search`, `? Shortcuts`, `q Quit`, plus `Esc Clear` when filtered).
+- **Updated `README.md` and `TermPlayer_Conversation_History.md`**:
+  - Rewrote `README.md` to reflect the Spotify-inspired charcoal/black/green UI, responsive layout, `?` shortcuts overlay, and simplified shortcuts table.
+  - Documented Tasks 10–12 and refreshed the Project Status section.
+
+### Result
+Keyboard controls, shortcuts modal, footer hints, and repository documentation are clean, consistent, and up to date, with verified PTY end-to-end and unit checks passing.
+
+---
+
+## Task 12 — Add Subtle Borders and Fix Top Header Spacing
+
+**Status:** Completed
+
+### User Request
+Add subtle thin borders or separators around the left and right sections while preserving the clean dark charcoal/black and green aesthetic, and fix the top section spacing and alignment so the entire header is cleanly visible inside the terminal without clipping.
+
+### Work Completed
+- **Subtle Green-Tinted Borders in `player.js`**:
+  - Added `borderFg: '#174D2E'` to `THEMES` (`charcoal` and `midnight`) and enabled `border: { type: 'line' }` on `playlistPanel` and `nowPlayingPanel`, styled consistently via `applyTheme()`.
+- **Top Spacing & Border-Aware Header Alignment**:
+  - Added `topMargin` (`1` row when terminal height `h >= 18`, `0` on ultra-short terminals) in `computeLayout()` so the top borders and section headers are never clipped against the top terminal edge.
+  - Updated `applyResponsiveLayout()`, `renderPlaylistHeader()`, and `renderNowPlaying()` to position inner widgets and align playlist track columns/durations cleanly inside the panel borders across both wide split-pane and narrow stacked layouts.
+
+### Result
+Both panels now have crisp, muted green thin borders with proper top clearance and aligned headers across wide and narrow terminal sizes, verified via syntax, unit, and PTY layout checks.
+
+---
+
 # Project Status at End of Conversation
 
 ## Completed
@@ -208,27 +280,27 @@ This document.
 - **Phase 3**: VLC `rc` integration, `afinfo` duration detection, ASCII progress bar (`lab5.js`)
 - **Phase 4**: Bug fixes (interval leak, duration parsing), clean terminal exit (`player.js` — early version)
 - **Phase 5 enhancements**: Commander.js CLI, volume control, seek/scrub, shuffle (Fisher-Yates), repeat modes, mute toggle, song search/filter
-- **Blessed TUI redesign**: Multi-window layout with orange aesthetic, three color themes, dedicated progress/keys windows, search modal, mouse support
-- **Bug fixes**: Volume `+` key, seek `<`/`>` keys, VLC seek syntax, arrow key behavior, visualizer removal
-- **Documentation**: Phase documents (`Phases/phase0.md` through `phase4.md`), updated `README.md`
+- **Blessed TUI v2.1**: Multi-window orange aesthetic, search modal, mouse support, visualizer removal, arrow-key seek fix
+- **Spotify-Inspired UI Redesign (v2.2.0)**: Dark charcoal/black theme with muted green thin borders and green accents, responsive split/stacked layout with top margin clearance, preloaded track durations in playlist, de-duplicated Now Playing panel, minimal bottom hints bar, `?` shortcuts overlay, and simplified single-key shortcuts
+- **Documentation**: Phase documents (`Phases/phase0.md` through `phase4.md`), updated `README.md`, and updated `TermPlayer_Conversation_History.md`
 
 ## Incomplete / Pending
 - **`blessed-contrib` dependency** remains in `package.json` but is no longer used after visualizer removal (could be cleaned up)
 - **Cross-platform support**: Player relies on macOS-specific `afinfo` for duration detection and requires VLC to be installed and on `PATH`
-- **No automated tests**: No unit or integration test suite exists
+- **Persistent automated test suite**: Layout/formatting helpers and PTY tests were run ad hoc via CLI rather than committed as an `npm test` suite
 - **No persistence**: Playback state, last played song, and playlists are not saved across restarts
 
 ## Important Files
 
 | File | Description |
 |---|---|
-| `player.js` | Main application — Blessed TUI music player (895 lines) |
+| `player.js` | Main application — Spotify-inspired Blessed TUI music player |
 | `cli_player.js` | Phase 1 — basic numbered selection player |
 | `raw_io.js` | Phase 2 — raw mode keypress exploration scratchpad |
 | `lab3.js` | Phase 2 — arrow-key navigation + SIGSTOP/SIGCONT pause |
 | `lab5.js` | Phase 3 — VLC integration + ASCII progress bar |
 | `package.json` | Project configuration (`blessed`, `blessed-contrib`, `commander`) |
-| `README.md` | Project documentation (Blessed TUI edition) |
+| `README.md` | Project documentation (Spotify-inspired Blessed TUI edition) |
 | `Phases/phase0.md` | Phase 1 documentation — Basic CLI Player |
 | `Phases/phase1.md` | Phase 2 documentation — Raw Mode & Arrow-Key Navigation |
 | `Phases/phase2.md` | Phase 3 documentation — VLC Integration & Progress Bar |
