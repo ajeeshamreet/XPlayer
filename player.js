@@ -1,16 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * XPlayer - Blessed Terminal Music Player (TUI)
+ * XPlayer - Minimal Spotify-Inspired Blessed Terminal Music Player
  * Features:
- * - Multi-window Blessed interface with vibrant Orange aesthetic
- * - Dedicated Playlist / Song Browser window with live search filtering
- * - Dedicated Progress Bar & Now Playing window
- * - Dedicated Keyboard Controls & Cheatsheet window
- * - Left/Right arrow keys for -5s / +5s seeking
- * - Up/Down arrow keys for playlist navigation, Enter to play
- * - n / b for Next / Previous track
- * - VLC rc-mode playback engine with volume, pause/play, seek, shuffle, repeat, mute
+ * - Dark charcoal & black palette with Spotify green accents
+ * - Left playlist pane displaying track names and durations
+ * - Right compact Now Playing pane with progress bar, playback controls, modes & volume
+ * - Minimal bottom hints bar with '?' overlay for full keyboard shortcuts
+ * - Responsive side-by-side or stacked layout for any terminal size
+ * - Preserved VLC rc-mode playback engine, afinfo duration lookup, search, shuffle, repeat
  */
 
 const fs = require('fs');
@@ -24,8 +22,8 @@ const program = new Command();
 
 program
   .name('cli-music-player')
-  .description('A blessed terminal-based music player with orange theme')
-  .version('2.1.0');
+  .description('A minimal Spotify-inspired blessed terminal music player')
+  .version('2.2.0');
 
 program
   .command('play', { isDefault: true })
@@ -38,62 +36,41 @@ program
     startPlayer(options);
   });
 
-// --- Theme Palettes ---
+// --- Theme Palettes (Verified xterm-256 safe hexes) ---
 const THEMES = {
-  sunset: {
-    name: 'Sunset Orange (Default)',
-    screenBg: '#D35400',
-    cardBg: '#7A2900',
-    cardBorder: '#FFA500',
-    cardBorderFocus: '#FFFFFF',
-    textFg: '#FFFFFF',
-    titleFg: '#FFE082',
-    accentFg: '#FFD700',
-    selectedBg: '#FF7700',
-    selectedFg: '#000000',
-    barFill: '#FFA500',
-    barEmpty: '#4A1800',
-    badgePlaying: '#FFD54F',
-    badgePaused: '#FFA726',
-    dimFg: '#FFCC99'
+  charcoal: {
+    name: 'Spotify Charcoal',
+    screenBg: '#000000',
+    panelBg: '#141414',
+    barBg: '#181818',
+    selectedBg: '#282828',
+    barEmpty: '#333333',
+    dividerFg: '#282828',
+    dimFg: '#888888',
+    mutedFg: '#B3B3B3',
+    textFg: '#F8F8F8',
+    green: '#1DB954',
+    greenBright: '#1ED760',
+    dangerFg: '#E53935'
   },
-  vibrant: {
-    name: 'Vibrant Orange Pop',
-    screenBg: '#E65100',
-    cardBg: '#993300',
-    cardBorder: '#FFD54F',
-    cardBorderFocus: '#FFFFFF',
-    textFg: '#FFFFFF',
-    titleFg: '#FFF8E1',
-    accentFg: '#FFEB3B',
-    selectedBg: '#FFA000',
-    selectedFg: '#000000',
-    barFill: '#FFB300',
-    barEmpty: '#5C1D00',
-    badgePlaying: '#FFE082',
-    badgePaused: '#FFB74D',
-    dimFg: '#FFE0B2'
-  },
-  obsidian: {
-    name: 'Obsidian Amber Glow',
-    screenBg: '#1A0C02',
-    cardBg: '#2E1404',
-    cardBorder: '#FF7700',
-    cardBorderFocus: '#FFA500',
-    textFg: '#FFF3E0',
-    titleFg: '#FFA726',
-    accentFg: '#FF9800',
-    selectedBg: '#E65100',
-    selectedFg: '#FFFFFF',
-    barFill: '#FF7700',
-    barEmpty: '#1F0B00',
-    badgePlaying: '#81C784',
-    badgePaused: '#FFB74D',
-    dimFg: '#BCAAA4'
+  midnight: {
+    name: 'Spotify Midnight',
+    screenBg: '#000000',
+    panelBg: '#000000',
+    barBg: '#141414',
+    selectedBg: '#282828',
+    barEmpty: '#333333',
+    dividerFg: '#282828',
+    dimFg: '#888888',
+    mutedFg: '#B3B3B3',
+    textFg: '#F8F8F8',
+    green: '#1DB954',
+    greenBright: '#1ED760',
+    dangerFg: '#E53935'
   }
 };
 
-let currentThemeKey = 'sunset';
+let currentThemeKey = 'charcoal';
 function getTheme() {
   return THEMES[currentThemeKey];
 }
@@ -107,10 +84,13 @@ let playingIndex = -1; // index in allSongs
 let isPaused = true;
 let isStopped = true;
 let vlcPlayProcess = null;
+let playRequestId = 0;
+let isExiting = false;
 
 let totalDuration = 0;
 let timeElapsed = 0;
 let elapsedTimer = null;
+const songDurations = new Map();
 
 let volume = 80;
 let isMuted = false;
@@ -122,18 +102,23 @@ let repeatMode = 'off'; // 'off' | 'all' | 'one'
 let searchMode = false;
 let searchQuery = '';
 let filteredSongs = []; // Array of { name, originalIndex }
+let helpModalOpen = false;
+let isUpdatingList = false;
 
 // Blessed UI Elements
 let screen = null;
 let rootBox = null;
-let headerBox = null;
-let playlistBox = null;
+let playlistPanel = null;
+let playlistHeader = null;
 let playlistWidget = null;
+let emptyPlaylistBox = null;
+let nowPlayingPanel = null;
+let nowPlayingContent = null;
+let bottomBar = null;
 let searchInputBox = null;
-let progressBox = null;
-let keysBox = null;
+let helpModal = null;
 
-// --- Helper Functions ---
+// --- Pure Formatting & Layout Helpers ---
 function formatTime(seconds) {
   if (isNaN(seconds) || seconds < 0) seconds = 0;
   const mins = Math.floor(seconds / 60);
@@ -141,6 +126,163 @@ function formatTime(seconds) {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
+function stripExtension(filename) {
+  return String(filename || '').replace(/\.[^/.]+$/, '');
+}
+
+function truncateText(text, maxLen) {
+  if (maxLen <= 0) return '';
+  const str = String(text || '');
+  if (str.length <= maxLen) return str;
+  if (maxLen === 1) return '…';
+  return `${str.slice(0, maxLen - 1)}…`;
+}
+
+function wrapTextLines(text, maxLen, maxLines = 2) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [''];
+  if (maxLen <= 2) return [truncateText(text, maxLen)];
+
+  const lines = [];
+  let current = '';
+
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length <= maxLen) {
+      current = candidate;
+    } else if (!current) {
+      lines.push(truncateText(word, maxLen));
+      if (lines.length >= maxLines) return lines;
+    } else {
+      lines.push(current);
+      if (lines.length >= maxLines) {
+        lines[lines.length - 1] = truncateText(
+          `${lines[lines.length - 1]} ${words.slice(i).join(' ')}`,
+          maxLen
+        );
+        return lines;
+      }
+      current = word;
+    }
+  }
+  if (current) {
+    lines.push(truncateText(current, maxLen));
+  }
+  return lines.slice(0, maxLines);
+}
+
+/**
+ * Computes responsive panel rectangles for side-by-side (>=68 cols) or stacked (<68 cols) terminals.
+ */
+function computeLayout(screenWidth, screenHeight) {
+  const w = Math.max(24, screenWidth || 80);
+  const h = Math.max(10, screenHeight || 24);
+
+  const bottomHeight = 1;
+  const bottomGap = h >= 14 ? 1 : 0;
+  const mainHeight = Math.max(6, h - bottomHeight - bottomGap);
+  const isStacked = w < 68;
+
+  if (!isStacked) {
+    const splitRatio = w >= 100 ? 0.54 : 0.50;
+    const leftWidth = Math.max(24, Math.floor((w - 1) * splitRatio));
+    const rightLeft = leftWidth + 1;
+    const rightWidth = Math.max(20, w - rightLeft);
+
+    return {
+      isStacked: false,
+      width: w,
+      height: h,
+      playlist: { top: 0, left: 0, width: leftWidth, height: mainHeight },
+      nowPlaying: { top: 0, left: rightLeft, width: rightWidth, height: mainHeight },
+      bottom: { top: h - 1, left: 0, width: w, height: bottomHeight }
+    };
+  }
+
+  const npHeight = h >= 20 ? 8 : (h >= 14 ? 6 : 4);
+  const gapY = h >= 14 ? 1 : 0;
+  const playlistHeight = Math.max(3, mainHeight - npHeight - gapY);
+  const npTop = playlistHeight + gapY;
+
+  return {
+    isStacked: true,
+    width: w,
+    height: h,
+    playlist: { top: 0, left: 0, width: w, height: playlistHeight },
+    nowPlaying: { top: npTop, left: 0, width: w, height: Math.max(3, mainHeight - npTop) },
+    bottom: { top: h - 1, left: 0, width: w, height: bottomHeight }
+  };
+}
+
+function buildProgressBarString(elapsed, total, barWidth, theme, paused) {
+  const w = Math.max(4, barWidth);
+  if (total <= 0) {
+    return `{${theme.barEmpty}-fg}${'─'.repeat(w)}{/}`;
+  }
+  const ratio = Math.min(1, Math.max(0, elapsed / total));
+  const thumbPos = Math.min(w - 1, Math.max(0, Math.round(ratio * (w - 1))));
+  const leftChars = thumbPos;
+  const rightChars = Math.max(0, w - thumbPos - 1);
+  const thumbColor = paused ? theme.mutedFg : theme.textFg;
+
+  return (
+    `{${theme.green}-fg}${'━'.repeat(leftChars)}{/}` +
+    `{${thumbColor}-fg}●{/}` +
+    `{${theme.barEmpty}-fg}${'─'.repeat(rightChars)}{/}`
+  );
+}
+
+function buildBottomHintsLine(maxWidth, theme, hasSearchFilter) {
+  // Order for rendering left-to-right; drop middle optional items first if narrow
+  const displayOrder = [
+    ['Space', 'Play/Pause'],
+    ['←/→', 'Seek'],
+    ['↑/↓', 'Navigate'],
+    ['/', 'Search'],
+    ...(hasSearchFilter ? [['Esc', 'Clear']] : []),
+    ['?', 'Shortcuts'],
+    ['q', 'Quit']
+  ];
+  const dropPriority = ['↑/↓', '←/→', '/', 'Esc', '?', 'Space', 'q'];
+
+  let active = displayOrder.slice();
+  const sep = maxWidth >= 64 ? '   ' : '  ';
+  const plainLen = (list) =>
+    list.map(([k, l]) => `${k} ${l}`).join(sep).length;
+
+  for (const dropKey of dropPriority) {
+    if (plainLen(active) <= maxWidth) break;
+    if (active.length <= 2) break;
+    active = active.filter(([k]) => k !== dropKey);
+  }
+
+  // Fallback compact labels if ultra narrow
+  if (plainLen(active) + 1 > maxWidth) {
+    active = [
+      ['Space', 'Play'],
+      ['?', 'Help'],
+      ['q', 'Quit']
+    ];
+    if (plainLen(active) + 1 > maxWidth) {
+      active = [
+        ['?', 'Help'],
+        ['q', 'Quit']
+      ];
+    }
+    if (plainLen(active) + 1 > maxWidth) {
+      active = [['q', 'Quit']];
+    }
+  }
+
+  const formatted = active
+    .map(([k, label]) => `{bold}{${theme.textFg}-fg}${k}{/} {${theme.dimFg}-fg}${label}{/}`)
+    .join(sep);
+
+  return ` ${formatted}`;
+}
+
+// --- Playback & Data Logic ---
 function shuffleArray(array) {
   const arr = [...array];
   for (let i = arr.length - 1; i > 0; i--) {
@@ -202,6 +344,35 @@ async function getSongDuration(songFilePath) {
   });
 }
 
+async function getCachedDuration(songName) {
+  if (songDurations.has(songName)) {
+    return songDurations.get(songName);
+  }
+  const dur = await getSongDuration(path.join(songDir, songName));
+  songDurations.set(songName, dur);
+  return dur;
+}
+
+async function preloadAllDurations() {
+  const queue = [...allSongs];
+  const concurrency = 4;
+
+  async function worker() {
+    while (queue.length > 0 && !isExiting) {
+      const songName = queue.shift();
+      if (!songName || songDurations.has(songName)) continue;
+      await getCachedDuration(songName);
+      if (!isExiting && screen) {
+        updatePlaylistItems();
+        screen.render();
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, queue.length) }, () => worker());
+  await Promise.all(workers);
+}
+
 function stopCurrentPlayback() {
   if (elapsedTimer) {
     clearInterval(elapsedTimer);
@@ -228,8 +399,8 @@ function startElapsedTracking() {
         return;
       }
     }
-    renderProgressWindow();
-    renderHeader();
+    renderNowPlaying();
+    screen.render();
   }, 250);
 }
 
@@ -239,6 +410,7 @@ async function playTrack(orderIndex) {
   const trackInfo = filteredSongs[clampedIdx];
   if (!trackInfo) return;
 
+  const reqId = ++playRequestId;
   cursor = clampedIdx;
   playingIndex = trackInfo.originalIndex;
   isPaused = false;
@@ -247,7 +419,9 @@ async function playTrack(orderIndex) {
   stopCurrentPlayback();
 
   const songPath = path.join(songDir, trackInfo.name);
-  totalDuration = await getSongDuration(songPath);
+  totalDuration = await getCachedDuration(trackInfo.name);
+  if (reqId !== playRequestId || isExiting) return;
+
   timeElapsed = 0;
 
   // Launch VLC rc mode headlessly with piped stdio so terminal stays clean
@@ -255,7 +429,7 @@ async function playTrack(orderIndex) {
     stdio: ['pipe', 'pipe', 'pipe']
   });
 
-  vlcPlayProcess.on('error', (err) => {
+  vlcPlayProcess.on('error', () => {
     // Silently handle error
   });
 
@@ -267,8 +441,7 @@ async function playTrack(orderIndex) {
 
   startElapsedTracking();
   updatePlaylistItems();
-  renderProgressWindow();
-  renderHeader();
+  renderNowPlaying();
   screen.render();
 }
 
@@ -282,8 +455,7 @@ function togglePlayPause() {
     vlcPlayProcess.stdin.write('pause\n');
   }
   updatePlaylistItems();
-  renderProgressWindow();
-  renderHeader();
+  renderNowPlaying();
   screen.render();
 }
 
@@ -294,7 +466,6 @@ function handleTrackEnd() {
     const nextIdx = (cursor + 1) % filteredSongs.length;
     playTrack(nextIdx);
   } else {
-    // repeat off
     if (cursor < filteredSongs.length - 1) {
       playTrack(cursor + 1);
     } else {
@@ -303,8 +474,7 @@ function handleTrackEnd() {
       timeElapsed = totalDuration;
       stopCurrentPlayback();
       updatePlaylistItems();
-      renderProgressWindow();
-      renderHeader();
+      renderNowPlaying();
       screen.render();
     }
   }
@@ -318,7 +488,7 @@ function seekPlayback(deltaSeconds) {
   if (vlcPlayProcess.stdin.writable) {
     vlcPlayProcess.stdin.write(`seek ${sign}\n`);
   }
-  renderProgressWindow();
+  renderNowPlaying();
   screen.render();
 }
 
@@ -342,8 +512,7 @@ function changeVolume(delta) {
   if (vlcPlayProcess && vlcPlayProcess.stdin.writable) {
     vlcPlayProcess.stdin.write(`volume ${Math.floor((volume / 100) * 256)}\n`);
   }
-  renderProgressWindow();
-  renderHeader();
+  renderNowPlaying();
   screen.render();
 }
 
@@ -360,8 +529,7 @@ function toggleMute() {
     const vlcVol = isMuted ? 0 : Math.floor((volume / 100) * 256);
     vlcPlayProcess.stdin.write(`volume ${vlcVol}\n`);
   }
-  renderProgressWindow();
-  renderHeader();
+  renderNowPlaying();
   screen.render();
 }
 
@@ -376,7 +544,7 @@ function toggleShuffle() {
     if (newIdx !== -1) cursor = newIdx;
   }
   updatePlaylistItems();
-  renderHeader();
+  renderNowPlaying();
   screen.render();
 }
 
@@ -384,8 +552,7 @@ function cycleRepeat() {
   if (repeatMode === 'off') repeatMode = 'all';
   else if (repeatMode === 'all') repeatMode = 'one';
   else repeatMode = 'off';
-  renderHeader();
-  renderProgressWindow();
+  renderNowPlaying();
   screen.render();
 }
 
@@ -397,122 +564,390 @@ function cycleTheme() {
   screen.render();
 }
 
-// --- UI Rendering Helpers ---
-function renderHeader() {
+function clearSearchFilter() {
+  if (!searchQuery) return;
+  const currentSongName = playingIndex !== -1 ? allSongs[playingIndex] : null;
+  searchQuery = '';
+  updateFilteredSongs();
+  if (currentSongName) {
+    const restoredIdx = filteredSongs.findIndex((s) => s.name === currentSongName);
+    cursor = restoredIdx !== -1 ? restoredIdx : 0;
+  } else {
+    cursor = 0;
+  }
+  renderPlaylistHeader();
+  updatePlaylistItems();
+  renderBottomBar();
+  screen.render();
+}
+
+// --- UI Rendering ---
+function renderPlaylistHeader() {
+  if (!playlistHeader || !playlistPanel) return;
   const t = getTheme();
-  const shuffleBadge = shuffleOn
-    ? `{bold}{${t.badgePlaying}-fg}[🔀 SHUFFLE: ON]{/}`
-    : `{${t.dimFg}-fg}[🔀 SHUFFLE: OFF]{/}`;
-  const repeatBadge =
-    repeatMode === 'one'
-      ? `{bold}{${t.badgePlaying}-fg}[🔁 REPEAT: ONE]{/}`
-      : repeatMode === 'all'
-      ? `{bold}{${t.badgePlaying}-fg}[🔁 REPEAT: ALL]{/}`
-      : `{${t.dimFg}-fg}[🔁 REPEAT: OFF]{/}`;
+  const panelW = playlistPanel.width || 40;
+  const padX = panelW >= 30 ? 2 : 1;
+  const innerW = Math.max(10, panelW - padX * 2);
 
-  const volBadge = isMuted
-    ? `{bold}{red-fg}[🔇 MUTED]{/}`
-    : `{${t.titleFg}-fg}[🔊 VOL: ${volume}%]{/}`;
+  let leftText = `{bold}{${t.textFg}-fg}Playlist{/}`;
+  let leftLen = 'Playlist'.length;
 
-  const themeBadge = `{${t.dimFg}-fg}[🎨 ${t.name}]{/}`;
+  let rightPlain = `${allSongs.length} ${allSongs.length === 1 ? 'track' : 'tracks'}`;
+  if (searchQuery) {
+    const maxQ = Math.max(5, Math.floor(innerW * 0.35));
+    const qDisplay = truncateText(searchQuery, maxQ);
+    leftText += `  {${t.green}-fg}"${blessed.escape(qDisplay)}"{/}`;
+    leftLen += 2 + qDisplay.length + 2;
+    rightPlain =
+      innerW >= 32
+        ? `${filteredSongs.length}/${allSongs.length}  Esc clear`
+        : `${filteredSongs.length}/${allSongs.length}`;
+  }
 
-  headerBox.setContent(
-    ` {bold}{${t.titleFg}-fg}🔥 XPLAYER TUI{/}  ${shuffleBadge}  ${repeatBadge}  ${volBadge}  ${themeBadge}`
-  );
+  const gap = Math.max(1, innerW - leftLen - rightPlain.length);
+  const showRight = leftLen + 1 + rightPlain.length <= innerW;
+  const headerLine = showRight
+    ? `${leftText}${' '.repeat(gap)}{${t.dimFg}-fg}${rightPlain}{/}`
+    : leftText;
+
+  const lines = [headerLine];
+  if (playlistPanel.height >= 8) {
+    lines.push(`{${t.dividerFg}-fg}${'─'.repeat(innerW)}{/}`);
+  }
+  playlistHeader.setContent(lines.join('\n'));
 }
 
 function updatePlaylistItems() {
+  if (!playlistWidget || !playlistPanel) return;
   const t = getTheme();
+
+  if (filteredSongs.length === 0) {
+    playlistWidget.setItems([]);
+    if (emptyPlaylistBox) {
+      emptyPlaylistBox.setContent(
+        searchQuery
+          ? `{${t.mutedFg}-fg}No tracks match "${blessed.escape(searchQuery)}"{/}\n\n{${t.dimFg}-fg}Press Esc to clear filter{/}`
+          : `{${t.dimFg}-fg}No tracks available{/}`
+      );
+      emptyPlaylistBox.show();
+    }
+    return;
+  }
+
+  if (emptyPlaylistBox) emptyPlaylistBox.hide();
+
+  const listW = Math.max(14, (playlistWidget.width || 30) - 2);
+  const indexWidth = Math.max(2, String(filteredSongs.length).length);
+  const showDuration = listW >= 20;
+
   const items = filteredSongs.map((songObj, idx) => {
     const isThisPlaying = songObj.originalIndex === playingIndex && !isStopped;
     const isThisPaused = isThisPlaying && isPaused;
 
-    let icon = '  ';
+    const numStr = String(idx + 1).padStart(indexWidth, ' ');
+    const activeGlyph = isThisPaused ? '‖' : '▸';
+    const prefixPlain = isThisPlaying
+      ? `${' '.repeat(indexWidth - 1)}${activeGlyph}  `
+      : `${numStr}  `;
+
+    const durStr = songDurations.has(songObj.name)
+      ? formatTime(songDurations.get(songObj.name))
+      : '--:--';
+    const rightPlain = showDuration ? ` ${durStr}` : '';
+
+    const titleBudget = Math.max(4, listW - prefixPlain.length - rightPlain.length);
+    const cleanTitle = stripExtension(songObj.name);
+    const truncated = truncateText(cleanTitle, titleBudget);
+    const padding = ' '.repeat(Math.max(0, titleBudget - truncated.length));
+    const escapedTitle = blessed.escape(truncated);
+
     if (isThisPlaying) {
-      icon = isThisPaused ? '⏸ ' : '▶ ';
+      const greenTone = isThisPaused ? t.green : t.greenBright;
+      const prefixTag = `{bold}{${greenTone}-fg}${prefixPlain}{/}`;
+      const titleTag = `{bold}{${greenTone}-fg}${escapedTitle}{/}${padding}`;
+      const durTag = showDuration ? `{${t.green}-fg}${rightPlain}{/}` : '';
+      return `${prefixTag}${titleTag}${durTag}`;
     }
 
-    const num = `${(idx + 1).toString().padStart(2, '0')}.`;
-    const displayName = songObj.name.replace(/\.[^/.]+$/, ''); // remove extension
-
-    if (isThisPlaying) {
-      return `${icon}{bold}${num} ${displayName}{/bold} {${t.accentFg}-fg}${isThisPaused ? '[PAUSED]' : '[PLAYING]'}{/}`;
-    }
-    return `${icon}${num} ${displayName}`;
+    const prefixTag = `{${t.dimFg}-fg}${prefixPlain}{/}`;
+    const durTag = showDuration ? `{${t.mutedFg}-fg}${rightPlain}{/}` : '';
+    return `${prefixTag}${escapedTitle}${padding}${durTag}`;
   });
 
-  playlistWidget.setItems(items);
-  if (filteredSongs.length > 0) {
-    playlistWidget.select(cursor);
+  isUpdatingList = true;
+  try {
+    playlistWidget.setItems(items);
+    if (filteredSongs.length > 0) {
+      cursor = Math.max(0, Math.min(cursor, filteredSongs.length - 1));
+      playlistWidget.select(cursor);
+    }
+  } finally {
+    isUpdatingList = false;
   }
 }
 
-function renderProgressWindow() {
+function renderNowPlaying() {
+  if (!nowPlayingPanel || !nowPlayingContent) return;
   const t = getTheme();
-  const width = Math.max(20, progressBox.width - 6);
+  const panelW = nowPlayingPanel.width || 40;
+  const panelH = nowPlayingPanel.height || 20;
+  const padX = panelW >= 30 ? 2 : 1;
+  const innerW = Math.max(16, panelW - padX * 2);
+  const compact = panelH < 11;
 
-  let songTitle = 'No track playing';
-  if (playingIndex !== -1 && allSongs[playingIndex]) {
-    songTitle = allSongs[playingIndex];
-  }
+  const hasTrack = playingIndex !== -1 && Boolean(allSongs[playingIndex]);
+  const rawTitle = hasTrack ? stripExtension(allSongs[playingIndex]) : 'No track playing';
 
-  // Playback badge
-  let statusBadge = `{${t.dimFg}-fg}[ ⏹ STOPPED ]{/}`;
-  if (!isStopped) {
-    statusBadge = isPaused
-      ? `{bold}{${t.badgePaused}-fg}[ ⏸ PAUSED ]{/}`
-      : `{bold}{${t.badgePlaying}-fg}[ ▶ PLAYING ]{/}`;
-  }
-
-  // Progress calculations
-  const percent = totalDuration > 0 ? Math.min(100, (timeElapsed / totalDuration) * 100) : 0;
+  // Progress line
   const elapsedStr = formatTime(timeElapsed);
   const totalStr = formatTime(totalDuration);
-  const remainingSec = Math.max(0, totalDuration - timeElapsed);
-  const remainingStr = `-${formatTime(remainingSec)}`;
+  const timeGap = innerW >= 28 ? '  ' : ' ';
+  const barW = Math.max(4, innerW - elapsedStr.length - totalStr.length - timeGap.length * 2);
+  const progressBar = buildProgressBarString(
+    timeElapsed,
+    totalDuration,
+    barW,
+    t,
+    isPaused || isStopped
+  );
+  const progressLine =
+    `{${t.mutedFg}-fg}${elapsedStr}{/}${timeGap}` +
+    `${progressBar}${timeGap}` +
+    `{${t.mutedFg}-fg}${totalStr}{/}`;
 
-  // Block progress bar
-  const barWidth = Math.max(12, width - 20);
-  const filledChars = Math.round((barWidth * percent) / 100);
-  const emptyChars = Math.max(0, barWidth - filledChars);
-  const progressBar = `{${t.barFill}-fg}${'█'.repeat(filledChars)}{/}{${t.barEmpty}-fg}${'░'.repeat(emptyChars)}{/}`;
+  // Playback controls + shuffle/repeat (shown once)
+  const shuffleStr = shuffleOn
+    ? `{${t.greenBright}-fg}⇄ on{/}`
+    : `{${t.dimFg}-fg}⇄ off{/}`;
+  const repeatStr =
+    repeatMode === 'off'
+      ? `{${t.dimFg}-fg}↻ off{/}`
+      : `{${t.greenBright}-fg}↻ ${repeatMode}{/}`;
 
-  // Volume meter
-  const volMeterWidth = 16;
-  const volFilled = Math.round((volMeterWidth * volume) / 100);
-  const volEmpty = Math.max(0, volMeterWidth - volFilled);
-  const volBar = isMuted
-    ? `{red-fg}[ MUTED ]${'░'.repeat(volMeterWidth - 8)}{/}`
-    : `{${t.accentFg}-fg}${'█'.repeat(volFilled)}{/}{${t.barEmpty}-fg}${'░'.repeat(volEmpty)}{/}`;
+  let playLabel;
+  let playGlyph;
+  if (isStopped || !hasTrack) {
+    playLabel = `{${t.dimFg}-fg}■ Stopped{/}`;
+    playGlyph = `{${t.dimFg}-fg}■{/}`;
+  } else if (isPaused) {
+    playLabel = `{bold}{${t.mutedFg}-fg}‖ Paused{/}`;
+    playGlyph = `{bold}{${t.mutedFg}-fg}‖{/}`;
+  } else {
+    playLabel = `{bold}{${t.greenBright}-fg}▶ Playing{/}`;
+    playGlyph = `{bold}{${t.greenBright}-fg}▶{/}`;
+  }
 
-  const content = [
+  const prevGlyph = `{${t.mutedFg}-fg}◂◂{/}`;
+  const nextGlyph = `{${t.mutedFg}-fg}▸▸{/}`;
+
+  let controlsLine;
+  if (innerW >= 36) {
+    controlsLine = `${shuffleStr}   ${prevGlyph}  ${playLabel}  ${nextGlyph}   ${repeatStr}`;
+  } else if (innerW >= 26) {
+    controlsLine = `${shuffleStr}  ${prevGlyph} ${playGlyph} ${nextGlyph}  ${repeatStr}`;
+  } else {
+    const sShort = shuffleOn ? `{${t.greenBright}-fg}⇄{/}` : `{${t.dimFg}-fg}⇄{/}`;
+    const rShort = repeatMode === 'off' ? `{${t.dimFg}-fg}↻{/}` : `{${t.greenBright}-fg}↻${repeatMode[0]}{/}`;
+    controlsLine = `${sShort} ${prevGlyph} ${playGlyph} ${nextGlyph} ${rShort}`;
+  }
+
+  // Volume bar (shown once)
+  const volLabel = `{${t.dimFg}-fg}Vol{/}`;
+  const volValueText = isMuted ? 'Muted' : `${volume}%`;
+  const volRight = isMuted
+    ? `{${t.dangerFg}-fg}Muted{/}`
+    : `{${t.mutedFg}-fg}${volValueText}{/}`;
+  const volBarW = Math.max(4, Math.min(20, innerW - 3 - 5 - 4));
+  let volBar;
+  if (isMuted) {
+    volBar = `{${t.barEmpty}-fg}${'─'.repeat(volBarW)}{/}`;
+  } else {
+    const vFilled = Math.round((volBarW * volume) / 100);
+    const vEmpty = Math.max(0, volBarW - vFilled);
+    volBar = `{${t.green}-fg}${'━'.repeat(vFilled)}{/}{${t.barEmpty}-fg}${'─'.repeat(vEmpty)}{/}`;
+  }
+  const volumeLine = `${volLabel}  ${volBar}  ${volRight}`;
+
+  if (compact) {
+    const titleLines = wrapTextLines(rawTitle, innerW, 1).map((line) =>
+      hasTrack
+        ? `{bold}{${t.textFg}-fg}${blessed.escape(line)}{/}`
+        : `{${t.dimFg}-fg}${blessed.escape(line)}{/}`
+    );
+    const rows = [titleLines[0], progressLine, controlsLine];
+    if (panelH >= 5) rows.push(volumeLine);
+    const compactTopPad = panelH > rows.length ? Math.floor((panelH - rows.length) / 2) : 0;
+    nowPlayingContent.top = 0;
+    nowPlayingContent.setContent([...Array(compactTopPad).fill(''), ...rows].join('\n'));
+    return;
+  }
+
+  // Standard layout with header matching Playlist panel
+  const titleLines = wrapTextLines(rawTitle, innerW, 2).map((line) =>
+    hasTrack
+      ? `{bold}{${t.textFg}-fg}${blessed.escape(line)}{/}`
+      : `{${t.dimFg}-fg}${blessed.escape(line)}{/}`
+  );
+
+  const bodyLines = [
+    ...titleLines,
     '',
-    ` {bold}Track:{/bold}   {${t.titleFg}-fg}${songTitle}{/}`,
-    ` {bold}State:{/bold}   ${statusBadge}     {bold}Volume:{/bold} [${volBar}] ${volume}%`,
+    progressLine,
     '',
-    ` {bold}Time:{/bold}    ${elapsedStr} / ${totalStr}   (${percent.toFixed(1)}%)   {${t.dimFg}-fg}Remaining: ${remainingStr}{/}`,
-    ` {bold}Bar:{/bold}     [${progressBar}]`,
+    controlsLine,
     '',
-    ` {${t.dimFg}-fg}Mode: ${repeatMode.toUpperCase()}   |   Shuffle: ${shuffleOn ? 'ON' : 'OFF'}   |   Seek: [← / →] ±5s{/}`
-  ].join('\n');
+    volumeLine
+  ];
 
-  progressBox.setContent(content);
+  const availableBodyH = Math.max(1, panelH - 2);
+  const topPad = availableBodyH > bodyLines.length
+    ? Math.floor((availableBodyH - bodyLines.length) / 2)
+    : 0;
+
+  const headerLines = [
+    `{${t.dimFg}-fg}Now Playing{/}`,
+    `{${t.dividerFg}-fg}${'─'.repeat(innerW)}{/}`
+  ];
+
+  const paddedBody = [
+    ...headerLines,
+    ...Array(topPad).fill(''),
+    ...bodyLines
+  ];
+
+  nowPlayingContent.top = 0;
+  nowPlayingContent.setContent(paddedBody.join('\n'));
 }
 
-function renderKeysWindow() {
+function renderBottomBar() {
+  if (!bottomBar) return;
   const t = getTheme();
-  const keysContent = [
-    '',
-    `  {bold}[← / →]{/bold}   Seek -5s / +5s        {bold}[+ / -]{/bold}   Volume Up / Down`,
-    `  {bold}[↑ / ↓]{/bold}   Navigate Playlist     {bold}[m]{/bold}       Mute / Unmute`,
-    `  {bold}[Enter]  {/bold} Play Highlighted     {bold}[n / b]{/bold}   Next / Prev Track`,
-    `  {bold}[p/Space]{/bold} Play / Pause          {bold}[s]{/bold}       Shuffle Toggle`,
-    `  {bold}[/]{/bold}       Search Songs          {bold}[r]{/bold}       Repeat Mode`,
-    `  {bold}[t]{/bold}       Toggle Orange Theme   {bold}[q / C-c]{/bold} Quit Player`,
-    ''
-  ].join('\n');
+  const maxW = Math.max(12, (bottomBar.width || 80) - 2);
+  bottomBar.setContent(buildBottomHintsLine(maxW, t, Boolean(searchQuery)));
+}
 
-  keysBox.setContent(keysContent);
+function renderHelpModal() {
+  if (!helpModal || !screen) return;
+  const t = getTheme();
+  const sw = screen.width || 80;
+  const sh = screen.height || 24;
+
+  const shortcuts = [
+    ['Space / p', 'Play / Pause'],
+    ['Enter', 'Play selected'],
+    ['n / ]', 'Next track'],
+    ['b / [', 'Previous track'],
+    ['← / →  (, / .)', 'Seek -5s / +5s'],
+    ['↑ / ↓  (k / j)', 'Navigate list'],
+    ['+ / -', 'Volume +/- 5%'],
+    ['m', 'Mute / Unmute'],
+    ['s', 'Toggle shuffle'],
+    ['r', 'Cycle repeat'],
+    ['/', 'Search tracks'],
+    ['Esc', 'Clear search'],
+    ['t', 'Dark contrast'],
+    ['?', 'Toggle help'],
+    ['q / Ctrl+C', 'Quit player']
+  ];
+
+  const useTwoCols = sw >= 72 && sh >= 16;
+  const modalW = useTwoCols ? Math.min(72, sw - 4) : Math.min(44, sw - 2);
+  const desiredH = useTwoCols ? 13 : Math.min(shortcuts.length + 5, sh - 2);
+  const modalH = Math.max(8, Math.min(desiredH, sh - 2));
+
+  helpModal.width = modalW;
+  helpModal.height = modalH;
+  helpModal.top = Math.max(0, Math.floor((sh - modalH) / 2));
+  helpModal.left = Math.max(0, Math.floor((sw - modalW) / 2));
+
+  const lines = [];
+  if (useTwoCols) {
+    const half = Math.ceil(shortcuts.length / 2);
+    const innerModalW = modalW - 4; // 2 border + 2 horizontal padding
+    const colW = Math.floor((innerModalW - 3) / 2);
+    for (let i = 0; i < half; i++) {
+      const leftItem = shortcuts[i];
+      const rightItem = shortcuts[i + half];
+      const fmtEntry = ([k, desc]) => {
+        const keyW = 15;
+        const descW = Math.max(4, colW - keyW);
+        const keyCol = k.padEnd(keyW, ' ');
+        const descCol = truncateText(desc, descW).padEnd(descW, ' ');
+        return `{bold}{${t.greenBright}-fg}${keyCol}{/}{${t.mutedFg}-fg}${descCol}{/}`;
+      };
+      const leftStr = leftItem ? fmtEntry(leftItem) : ' '.repeat(colW);
+      const rightStr = rightItem ? fmtEntry(rightItem) : '';
+      lines.push(` ${leftStr}  ${rightStr}`);
+    }
+  } else {
+    const innerW = Math.max(16, modalW - 4);
+    for (const [k, desc] of shortcuts) {
+      const keyCol = k.padEnd(15, ' ');
+      const descCol = truncateText(desc, Math.max(4, innerW - 16));
+      lines.push(` {bold}{${t.greenBright}-fg}${keyCol}{/}{${t.mutedFg}-fg}${descCol}{/}`);
+    }
+  }
+
+  lines.push('');
+  lines.push(` {${t.dimFg}-fg}Press ? or Esc to close{/}`);
+  helpModal.setContent(lines.join('\n'));
+}
+
+function positionSearchBox() {
+  if (!searchInputBox || !screen) return;
+  const sw = screen.width || 80;
+  const sh = screen.height || 24;
+  const boxW = Math.max(24, Math.min(60, sw - 4));
+  searchInputBox.width = boxW;
+  searchInputBox.left = Math.max(0, Math.floor((sw - boxW) / 2));
+  searchInputBox.top = Math.max(1, Math.floor((sh - 3) / 2));
+}
+
+function applyResponsiveLayout() {
+  if (!screen || !playlistPanel || !nowPlayingPanel || !bottomBar) return;
+  const layout = computeLayout(screen.width, screen.height);
+
+  playlistPanel.top = layout.playlist.top;
+  playlistPanel.left = layout.playlist.left;
+  playlistPanel.width = layout.playlist.width;
+  playlistPanel.height = layout.playlist.height;
+
+  const pPadX = layout.playlist.width >= 30 ? 2 : 1;
+  const pHeaderH = layout.playlist.height >= 8 ? 2 : 1;
+
+  playlistHeader.top = 0;
+  playlistHeader.left = pPadX;
+  playlistHeader.width = Math.max(8, layout.playlist.width - pPadX * 2);
+  playlistHeader.height = pHeaderH;
+
+  playlistWidget.top = pHeaderH;
+  playlistWidget.left = pPadX;
+  playlistWidget.width = Math.max(8, layout.playlist.width - pPadX * 2);
+  playlistWidget.height = Math.max(1, layout.playlist.height - pHeaderH);
+
+  emptyPlaylistBox.top = pHeaderH + 1;
+  emptyPlaylistBox.left = pPadX;
+  emptyPlaylistBox.width = Math.max(8, layout.playlist.width - pPadX * 2);
+  emptyPlaylistBox.height = Math.max(3, layout.playlist.height - pHeaderH - 1);
+
+  nowPlayingPanel.top = layout.nowPlaying.top;
+  nowPlayingPanel.left = layout.nowPlaying.left;
+  nowPlayingPanel.width = layout.nowPlaying.width;
+  nowPlayingPanel.height = layout.nowPlaying.height;
+
+  const nPadX = layout.nowPlaying.width >= 30 ? 2 : 1;
+  nowPlayingContent.top = 0;
+  nowPlayingContent.left = nPadX;
+  nowPlayingContent.width = Math.max(8, layout.nowPlaying.width - nPadX * 2);
+  nowPlayingContent.height = Math.max(3, layout.nowPlaying.height);
+
+  bottomBar.top = layout.bottom.top;
+  bottomBar.left = layout.bottom.left;
+  bottomBar.width = layout.bottom.width;
+  bottomBar.height = layout.bottom.height;
+
+  positionSearchBox();
+  if (helpModalOpen) renderHelpModal();
 }
 
 function applyTheme() {
@@ -520,31 +955,46 @@ function applyTheme() {
 
   rootBox.style.bg = t.screenBg;
 
-  headerBox.style.bg = t.cardBg;
-  headerBox.style.border.fg = t.cardBorder;
-  headerBox.style.fg = t.textFg;
+  playlistPanel.style.bg = t.panelBg;
+  playlistPanel.style.fg = t.textFg;
 
-  playlistBox.style.bg = t.cardBg;
-  playlistBox.style.border.fg = t.cardBorder;
-  playlistBox.style.fg = t.textFg;
+  playlistHeader.style.bg = t.panelBg;
+  playlistHeader.style.fg = t.textFg;
 
-  playlistWidget.style.bg = t.cardBg;
+  playlistWidget.style.bg = t.panelBg;
   playlistWidget.style.fg = t.textFg;
+  playlistWidget.style.item.bg = t.panelBg;
+  playlistWidget.style.item.fg = t.textFg;
   playlistWidget.style.selected.bg = t.selectedBg;
-  playlistWidget.style.selected.fg = t.selectedFg;
+  playlistWidget.style.selected.fg = t.textFg;
+  if (playlistWidget.scrollbar) {
+    playlistWidget.style.scrollbar = { bg: t.barEmpty };
+  }
 
-  progressBox.style.bg = t.cardBg;
-  progressBox.style.border.fg = t.cardBorder;
-  progressBox.style.fg = t.textFg;
+  emptyPlaylistBox.style.bg = t.panelBg;
+  emptyPlaylistBox.style.fg = t.dimFg;
 
-  keysBox.style.bg = t.cardBg;
-  keysBox.style.border.fg = t.cardBorder;
-  keysBox.style.fg = t.textFg;
+  nowPlayingPanel.style.bg = t.panelBg;
+  nowPlayingPanel.style.fg = t.textFg;
+  nowPlayingContent.style.bg = t.panelBg;
+  nowPlayingContent.style.fg = t.textFg;
 
-  renderHeader();
+  bottomBar.style.bg = t.barBg;
+  bottomBar.style.fg = t.dimFg;
+
+  searchInputBox.style.bg = t.barBg;
+  searchInputBox.style.fg = t.textFg;
+  searchInputBox.style.border.fg = t.green;
+
+  helpModal.style.bg = t.barBg;
+  helpModal.style.fg = t.textFg;
+  helpModal.style.border.fg = t.green;
+
+  renderPlaylistHeader();
   updatePlaylistItems();
-  renderProgressWindow();
-  renderKeysWindow();
+  renderNowPlaying();
+  renderBottomBar();
+  if (helpModalOpen) renderHelpModal();
 }
 
 // --- Player Initialization ---
@@ -554,13 +1004,13 @@ function startPlayer(options) {
   repeatMode = options.repeat ? 'all' : 'off';
   volume = parseInt(options.volume, 10);
   if (isNaN(volume)) volume = 80;
+  volume = Math.max(0, Math.min(100, volume));
 
   if (!fs.existsSync(songDir)) {
     console.error(`Error: Song directory does not exist: ${songDir}`);
     process.exit(1);
   }
 
-  // Read songs (audio files)
   allSongs = fs
     .readdirSync(songDir)
     .filter((file) => !file.startsWith('.') && /\.(mp3|wav|m4a|flac|ogg|aac)$/i.test(file));
@@ -576,7 +1026,7 @@ function startPlayer(options) {
   // --- Blessed Screen Setup ---
   screen = blessed.screen({
     smartCSR: true,
-    title: '⚡ XPlayer - Blessed Terminal Music Player',
+    title: 'XPlayer',
     fullUnicode: true,
     mouse: true,
     warning: true
@@ -584,270 +1034,175 @@ function startPlayer(options) {
 
   const t = getTheme();
 
-  // Root background container with orange theme
   rootBox = blessed.box({
     parent: screen,
     top: 0,
     left: 0,
     width: '100%',
     height: '100%',
-    style: {
-      bg: t.screenBg
-    }
+    style: { bg: t.screenBg }
   });
 
-  // Top Header Box
-  headerBox = blessed.box({
+  // Left Panel: Playlist
+  playlistPanel = blessed.box({
     parent: rootBox,
-    top: 0,
-    left: 0,
-    width: '100%',
-    height: 3,
-    border: { type: 'line' },
     tags: true,
-    style: {
-      bg: t.cardBg,
-      fg: t.textFg,
-      border: { fg: t.cardBorder }
-    }
+    style: { bg: t.panelBg, fg: t.textFg }
   });
 
-  // Window 1: Playlist Box (Left Column: 48% width)
-  playlistBox = blessed.box({
-    parent: rootBox,
-    top: 3,
-    left: 0,
-    width: '48%',
-    height: '100%-3',
-    label: '[ 📂 Tracks & Playlist ]',
-    border: { type: 'line' },
+  playlistHeader = blessed.box({
+    parent: playlistPanel,
     tags: true,
-    style: {
-      bg: t.cardBg,
-      fg: t.textFg,
-      border: { fg: t.cardBorder }
-    }
+    wrap: false,
+    style: { bg: t.panelBg, fg: t.textFg }
   });
 
   playlistWidget = blessed.list({
-    parent: playlistBox,
-    top: 0,
-    left: 0,
-    width: '100%-2',
-    height: '100%-4',
-    keys: false, // handled manually for precise control
+    parent: playlistPanel,
+    keys: false,
     mouse: true,
     tags: true,
-    style: {
-      bg: t.cardBg,
-      fg: t.textFg,
-      selected: {
-        bg: t.selectedBg,
-        fg: t.selectedFg,
-        bold: true
-      }
-    }
-  });
-
-  // Playlist Footer / Search prompt inside playlist box
-  const playlistFooter = blessed.box({
-    parent: playlistBox,
-    bottom: 0,
-    left: 0,
-    width: '100%-2',
-    height: 2,
-    tags: true,
-    style: {
-      bg: t.cardBg,
-      fg: t.dimFg
+    scrollbar: {
+      ch: ' ',
+      track: { bg: t.panelBg },
+      style: { bg: t.barEmpty }
     },
-    content: '{bold}[Enter]{/bold} Play  {bold}[/]{/bold} Search  {bold}[↑/↓]{/bold} Move  {bold}[←/→]{/bold} Seek'
-  });
-
-  // Window 2: Progress Bar & Now Playing Window (Right Top: 52% height)
-  progressBox = blessed.box({
-    parent: rootBox,
-    top: 3,
-    left: '48%',
-    width: '52%',
-    height: '52%',
-    label: '[ ⏱ Now Playing & Progress Bar ]',
-    border: { type: 'line' },
-    tags: true,
     style: {
-      bg: t.cardBg,
+      bg: t.panelBg,
       fg: t.textFg,
-      border: { fg: t.cardBorder }
+      item: { bg: t.panelBg, fg: t.textFg },
+      selected: { bg: t.selectedBg, fg: t.textFg, bold: true }
     }
   });
 
-  // Window 3: Keyboard Controls & Cheatsheet Window (Right Bottom: remaining 45% height)
-  keysBox = blessed.box({
-    parent: rootBox,
-    top: '55%',
-    left: '48%',
-    width: '52%',
-    height: '45%',
-    label: '[ ⌨ Keyboard Controls & Keys ]',
-    border: { type: 'line' },
+  emptyPlaylistBox = blessed.box({
+    parent: playlistPanel,
+    hidden: true,
+    align: 'center',
+    valign: 'middle',
     tags: true,
-    style: {
-      bg: t.cardBg,
-      fg: t.textFg,
-      border: { fg: t.cardBorder }
-    }
+    style: { bg: t.panelBg, fg: t.dimFg }
   });
 
-  // Search Input Modal / Bar
+  // Right Panel: Compact Now Playing
+  nowPlayingPanel = blessed.box({
+    parent: rootBox,
+    tags: true,
+    style: { bg: t.panelBg, fg: t.textFg }
+  });
+
+  nowPlayingContent = blessed.box({
+    parent: nowPlayingPanel,
+    tags: true,
+    wrap: false,
+    style: { bg: t.panelBg, fg: t.textFg }
+  });
+
+  // Slim Bottom Hints Bar
+  bottomBar = blessed.box({
+    parent: rootBox,
+    tags: true,
+    wrap: false,
+    style: { bg: t.barBg, fg: t.dimFg }
+  });
+
+  // Search Input Overlay
   searchInputBox = blessed.textbox({
     parent: rootBox,
-    bottom: 1,
-    left: '10%',
-    width: '80%',
     height: 3,
     hidden: true,
-    label: '[ 🔍 Search Songs (Enter to select, Esc to cancel) ]',
+    label: ' Search (Enter to filter, Esc to cancel) ',
     border: { type: 'line' },
-    inputOnFocus: true,
+    inputOnFocus: false,
+    padding: { left: 1, right: 1 },
     style: {
-      bg: '#4A1800',
-      fg: '#FFFFFF',
-      border: { fg: '#FFD700' }
+      bg: t.barBg,
+      fg: t.textFg,
+      border: { fg: t.green },
+      label: { fg: t.greenBright, bold: true }
     }
   });
 
-  // Mouse selection in playlist
-  playlistWidget.on('select', (item, index) => {
+  // Shortcuts Help Modal (hidden until '?' pressed)
+  helpModal = blessed.box({
+    parent: rootBox,
+    hidden: true,
+    tags: true,
+    wrap: false,
+    scrollable: true,
+    keys: false,
+    mouse: true,
+    label: ' Keyboard Shortcuts ',
+    border: { type: 'line' },
+    padding: { top: 1, left: 1, right: 1 },
+    style: {
+      bg: t.barBg,
+      fg: t.textFg,
+      border: { fg: t.green },
+      label: { fg: t.greenBright, bold: true }
+    }
+  });
+
+  // Sync mouse selection with cursor without letting setItems() clobber cursor
+  playlistWidget.on('select item', (_, index) => {
+    if (!isUpdatingList) {
+      cursor = index;
+    }
+  });
+
+  playlistWidget.on('select', (_, index) => {
     playTrack(index);
   });
 
-  // --- Keyboard Event Handling ---
-  screen.on('keypress', (ch, key) => {
-    if (searchMode) {
-      if (key.name === 'escape') {
-        exitSearchMode();
-        return;
-      }
-      return;
+  function toggleHelpModal(forceState) {
+    helpModalOpen = typeof forceState === 'boolean' ? forceState : !helpModalOpen;
+    if (helpModalOpen) {
+      renderHelpModal();
+      helpModal.show();
+      helpModal.setFront();
+    } else {
+      helpModal.hide();
     }
-
-    // Normal Mode Keybindings
-    if (key.name === 'q' || (key.ctrl && key.name === 'c')) {
-      cleanupAndExit();
-      return;
-    }
-
-    // Up / Down: Move selection in playlist
-    if (key.name === 'up' || key.name === 'k') {
-      if (filteredSongs.length > 0) {
-        cursor = (cursor - 1 + filteredSongs.length) % filteredSongs.length;
-        playlistWidget.select(cursor);
-        screen.render();
-      }
-      return;
-    }
-
-    if (key.name === 'down' || key.name === 'j') {
-      if (filteredSongs.length > 0) {
-        cursor = (cursor + 1) % filteredSongs.length;
-        playlistWidget.select(cursor);
-        screen.render();
-      }
-      return;
-    }
-
-    // Enter: Play currently selected song
-    if (key.name === 'return' || key.name === 'enter') {
-      playTrack(cursor);
-      return;
-    }
-
-    // Space / p: Play/Pause toggle
-    if (key.name === 'space' || key.name === 'p') {
-      togglePlayPause();
-      return;
-    }
-
-    // Left / Right Arrow Keys: SEEK -5s / +5s
-    if (key.name === 'right' || ch === '>' || ch === '.') {
-      seekPlayback(5);
-      return;
-    }
-
-    if (key.name === 'left' || ch === '<' || ch === ',') {
-      seekPlayback(-5);
-      return;
-    }
-
-    // n: Next track, b: Previous track
-    if (ch === 'n' || ch === ']') {
-      nextTrack();
-      return;
-    }
-
-    if (ch === 'b' || ch === '[') {
-      previousTrack();
-      return;
-    }
-
-    // Volume controls
-    if (ch === '+' || ch === '=') {
-      changeVolume(5);
-      return;
-    }
-
-    if (ch === '-' || ch === '_') {
-      changeVolume(-5);
-      return;
-    }
-
-    // Mute toggle
-    if (ch === 'm') {
-      toggleMute();
-      return;
-    }
-
-    // Shuffle toggle
-    if (ch === 's') {
-      toggleShuffle();
-      return;
-    }
-
-    // Repeat cycle
-    if (ch === 'r') {
-      cycleRepeat();
-      return;
-    }
-
-    // Theme toggle
-    if (ch === 't') {
-      cycleTheme();
-      return;
-    }
-
-    // Search mode
-    if (ch === '/') {
-      enterSearchMode();
-      return;
-    }
-  });
+    screen.render();
+  }
 
   function enterSearchMode() {
     searchMode = true;
+    positionSearchBox();
     searchInputBox.setValue('');
     searchInputBox.show();
+    searchInputBox.setFront();
     searchInputBox.focus();
     screen.render();
 
     searchInputBox.readInput((err, value) => {
-      if (err || value === undefined) {
+      if (err || value == null) {
         exitSearchMode();
         return;
       }
-      searchQuery = (value || '').trim();
+      const nextQuery = value.trim();
+      const currentSongName = playingIndex !== -1 ? allSongs[playingIndex] : null;
+      searchQuery = nextQuery;
       updateFilteredSongs();
+
+      if (!nextQuery) {
+        if (currentSongName) {
+          const restoredIdx = filteredSongs.findIndex((s) => s.name === currentSongName);
+          cursor = restoredIdx !== -1 ? restoredIdx : 0;
+        } else {
+          cursor = 0;
+        }
+        renderPlaylistHeader();
+        updatePlaylistItems();
+        renderBottomBar();
+        exitSearchMode();
+        return;
+      }
+
       cursor = 0;
+      renderPlaylistHeader();
       updatePlaylistItems();
+      renderBottomBar();
       exitSearchMode();
       if (filteredSongs.length > 0) {
         playTrack(0);
@@ -858,38 +1213,175 @@ function startPlayer(options) {
   function exitSearchMode() {
     searchMode = false;
     searchInputBox.hide();
+    playlistWidget.focus();
     screen.render();
   }
 
   function cleanupAndExit() {
+    isExiting = true;
     stopCurrentPlayback();
     if (elapsedTimer) clearInterval(elapsedTimer);
-    screen.destroy();
+    if (screen) screen.destroy();
     process.exit(0);
   }
 
-  // Handle process termination signals
+  // --- Keyboard Event Handling ---
+  screen.on('keypress', (ch, key) => {
+    if (key && key.ctrl && key.name === 'c') {
+      cleanupAndExit();
+      return;
+    }
+
+    if (searchMode) {
+      return;
+    }
+
+    if (key && key.name === 'q') {
+      cleanupAndExit();
+      return;
+    }
+
+    if (helpModalOpen) {
+      if (ch === '?' || (key && (key.name === 'escape' || key.name === 'return' || key.name === 'enter'))) {
+        toggleHelpModal(false);
+      }
+      return;
+    }
+
+    if (ch === '?') {
+      toggleHelpModal(true);
+      return;
+    }
+
+    if (key && key.name === 'escape') {
+      if (searchQuery) {
+        clearSearchFilter();
+      }
+      return;
+    }
+
+    if (key && (key.name === 'up' || key.name === 'k')) {
+      if (filteredSongs.length > 0) {
+        cursor = (cursor - 1 + filteredSongs.length) % filteredSongs.length;
+        playlistWidget.select(cursor);
+        screen.render();
+      }
+      return;
+    }
+
+    if (key && (key.name === 'down' || key.name === 'j')) {
+      if (filteredSongs.length > 0) {
+        cursor = (cursor + 1) % filteredSongs.length;
+        playlistWidget.select(cursor);
+        screen.render();
+      }
+      return;
+    }
+
+    if (key && (key.name === 'return' || key.name === 'enter')) {
+      playTrack(cursor);
+      return;
+    }
+
+    if (key && (key.name === 'space' || key.name === 'p')) {
+      togglePlayPause();
+      return;
+    }
+
+    if ((key && key.name === 'right') || ch === '>' || ch === '.') {
+      seekPlayback(5);
+      return;
+    }
+
+    if ((key && key.name === 'left') || ch === '<' || ch === ',') {
+      seekPlayback(-5);
+      return;
+    }
+
+    if (ch === 'n' || ch === ']') {
+      nextTrack();
+      return;
+    }
+
+    if (ch === 'b' || ch === '[') {
+      previousTrack();
+      return;
+    }
+
+    if (ch === '+' || ch === '=') {
+      changeVolume(5);
+      return;
+    }
+
+    if (ch === '-' || ch === '_') {
+      changeVolume(-5);
+      return;
+    }
+
+    if (ch === 'm') {
+      toggleMute();
+      return;
+    }
+
+    if (ch === 's') {
+      toggleShuffle();
+      return;
+    }
+
+    if (ch === 'r') {
+      cycleRepeat();
+      return;
+    }
+
+    if (ch === 't') {
+      cycleTheme();
+      return;
+    }
+
+    if (ch === '/') {
+      enterSearchMode();
+    }
+  });
+
   process.on('SIGINT', cleanupAndExit);
   process.on('SIGTERM', cleanupAndExit);
   process.on('exit', () => {
+    isExiting = true;
     stopCurrentPlayback();
   });
 
-  // Handle terminal resizing
   screen.on('resize', () => {
-    renderHeader();
+    applyResponsiveLayout();
+    renderPlaylistHeader();
     updatePlaylistItems();
-    renderProgressWindow();
-    renderKeysWindow();
+    renderNowPlaying();
+    renderBottomBar();
     screen.render();
   });
 
-  // Initial render
+  // Initial layout, theme, and render
+  applyResponsiveLayout();
   applyTheme();
   screen.render();
+
+  // Preload track durations asynchronously without blocking startup
+  preloadAllDurations();
 
   // Auto-play first song
   playTrack(0);
 }
 
-program.parse(process.argv);
+if (require.main === module) {
+  program.parse(process.argv);
+}
+
+module.exports = {
+  THEMES,
+  formatTime,
+  stripExtension,
+  truncateText,
+  wrapTextLines,
+  computeLayout,
+  buildProgressBarString,
+  buildBottomHintsLine
+};
